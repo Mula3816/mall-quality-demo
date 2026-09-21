@@ -103,6 +103,9 @@ async function loginByUI(page: Page, username = 'admin') {
   await page.getByLabel('用户名').fill(username);
   await page.getByLabel('密码').fill('123456');
   await page.getByRole('button', { name: '进入后台' }).click();
+  // 等待登录完成（token 写入 localStorage 后跳转概览页）再返回，
+  // 避免调用方在登录请求尚未完成时访问受保护页面导致偶发失败。
+  await expect(page).toHaveURL(/\/dashboard$/);
 }
 
 async function createOrderByApi(request: APIRequestContext) {

@@ -84,6 +84,10 @@ async function loginByMobileUI(page: Page) {
   await page.getByLabel('用户名').fill('buyer');
   await page.getByLabel('密码').fill('123456');
   await page.getByRole('button', { name: '登录' }).click();
+  // 等待登录完成（token 写入 localStorage 后跳转商品列表）再返回。
+  // 否则调用方立即 goto 受保护页面时，路由守卫可能因尚未拿到 token 重定向回登录页，
+  // 导致后续元素断言偶发失败（本地时序侥幸通过，CI 上稳定复现）。
+  await expect(page).toHaveURL(/\/products$/);
 }
 
 async function loginHeaders(request: APIRequestContext, username = 'buyer') {
