@@ -844,6 +844,12 @@ def cancel_order(
     if order.status not in {"created", "paid"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前订单不能取消")
     apply_order_status(order, "canceled")
+    # 取消订单返还库存：下单时已扣减，取消必须回补，避免库存凭空蒸发。
+    # 商品可能已被后台删除（订单快照无外键），此时跳过即可。
+    for item in order.items:
+        product = db.get(Product, item.product_id)
+        if product:
+            product.stock += item.quantity
     db.commit()
     db.refresh(order)
     return order_to_dict(order)

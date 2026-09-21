@@ -2,6 +2,8 @@ import { expect, request, test, type APIRequestContext } from '@playwright/test'
 
 import { apiBaseURL } from '../support/api-base-url';
 
+const testImageUrl = 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=900&q=80';
+
 test.describe('商城接口自动化', () => {
   test('健康检查接口可用', async () => {
     const api = await request.newContext({ baseURL: apiBaseURL });
@@ -22,6 +24,76 @@ test.describe('商城接口自动化', () => {
 
     expect(response.status()).toBe(401);
     expect(await response.json()).toMatchObject({ detail: '用户名或密码错误' });
+    await api.dispose();
+  });
+
+  test('取消订单后商品库存恢复', async () => {
+    const api = await request.newContext({ baseURL: apiBaseURL });
+
+    // admin 创建固定库存的商品
+    const adminLogin = await api.post('/api/auth/login', {
+      data: { username: 'admin', password: '123456' },
+    });
+    await expect(adminLogin).toBeOK();
+    const adminToken = (await adminLogin.json()).access_token as string;
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+
+    const createResponse = await api.post('/api/admin/products', {
+      headers: adminHeaders,
+      data: {
+        name: `库存返还商品-${Date.now()}`,
+        description: '取消订单库存返还测试数据',
+        price: 66.6,
+        stock: 5,
+        category: '库存测试',
+        image_url: testImageUrl,
+      },
+    });
+    await expect(createResponse).toBeOK();
+    const product = await createResponse.json();
+    expect(product.stock).toBe(5);
+
+    // buyer 加购 2 件并下单
+    const buyerLogin = await api.post('/api/auth/login', {
+      data: { username: 'buyer', password: '123456' },
+    });
+    await expect(buyerLogin).toBeOK();
+    const buyerToken = (await buyerLogin.json()).access_token as string;
+    const buyerHeaders = { Authorization: `Bearer ${buyerToken}` };
+
+    await clearCart(api, buyerHeaders);
+    const addressId = await ensureAddress(api, buyerHeaders);
+
+    const addCartResponse = await api.post('/api/cart/items', {
+      headers: buyerHeaders,
+      data: { product_id: product.id, quantity: 2 },
+    });
+    await expect(addCartResponse).toBeOK();
+
+    const orderResponse = await api.post('/api/orders', {
+      headers: buyerHeaders,
+      data: { address_id: addressId },
+    });
+    await expect(orderResponse).toBeOK();
+    const order = await orderResponse.json();
+
+    // 下单扣减库存：5 - 2 = 3
+    const stockAfterOrder = await getProductStock(api, product.id);
+    expect(stockAfterOrder).toBe(3);
+
+    // 取消订单
+    const cancelResponse = await api.post(`/api/orders/${order.id}/cancel`, {
+      headers: buyerHeaders,
+    });
+    await expect(cancelResponse).toBeOK();
+    expect((await cancelResponse.json()).status).toBe('canceled');
+
+    // 取消后库存应恢复为 5
+    const stockAfterCancel = await getProductStock(api, product.id);
+    expect(stockAfterCancel).toBe(5);
+
+    // 清理测试数据
+    await api.delete(`/api/admin/products/${product.id}`, { headers: adminHeaders });
     await api.dispose();
   });
 
@@ -105,6 +177,13 @@ async function clearCart(api: APIRequestContext, headers: Record<string, string>
   for (const item of cart.items || []) {
     await api.delete(`/api/cart/items/${item.id}`, { headers });
   }
+}
+
+async function getProductStock(api: APIRequestContext, productId: number) {
+  const response = await api.get(`/api/products/${productId}`);
+  await expect(response).toBeOK();
+  const product = await response.json();
+  return product.stock as number;
 }
 
 async function ensureAddress(api: APIRequestContext, headers: Record<string, string>) {
